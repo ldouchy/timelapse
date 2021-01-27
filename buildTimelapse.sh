@@ -67,8 +67,13 @@ addtimestamp () {
   PICTURE=$1
 
   FILEDATE=$(echo ${PICTURE} | awk -F\. '{print $1}')
+  TIMESTAMP=$(echo ${FILEDATE} | awk -F\+ '{print $1}' | sed 's/T//' | sed 's/^\(.\{12\}\)/\1./')
 
-  if [ -f ${FILEDATE}.jpg ] ; then return ; fi
+  if [ -f ${FILEDATE}.jpg ]
+  then
+    touch -t ${TIMESTAMP} ${FILEDATE}.jpg
+    return
+  fi
 
   montage \
     -label "${FILEDATE}" ${PICTURE} \
@@ -76,6 +81,8 @@ addtimestamp () {
     -gravity Center \
     -geometry +0+0 \
     ${FILEDATE}.jpg
+  
+  touch -t ${TIMESTAMP} ${FILEDATE}.jpg
 }
 
 ###
