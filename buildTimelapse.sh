@@ -67,7 +67,7 @@ addtimestamp () {
   PICTURE=$1
 
   FILEDATE=$(echo ${PICTURE} | awk -F\. '{print $1}')
-  TIMESTAMP=$(echo ${FILEDATE} | awk -F\+ '{print $1}' | sed 's/T//' | sed 's/^\(.\{12\}\)/\1./')
+  TIMESTAMP=$(echo ${FILEDATE/T/} | awk -F\+ '{print $1}' | sed 's/^\(.\{12\}\)/\1./')
 
   if [ -f ${FILEDATE}.jpg ]
   then
