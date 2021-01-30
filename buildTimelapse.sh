@@ -15,8 +15,19 @@ nightfileselection () {
 }
 
 videoprocessor () {
+  LOGLEVEL="-loglevel quiet"
+  if [[ ${DEBUG} -eq 1 ]]
+  then
+    LOGLEVEL=""
+  fi
+
+  FRAMERATE=$2  ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprocessor - FRAMERATE: ${FRAMERATE}" ; fi
+  FILENAME=$3   ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprocessor - FILENAME: ${FILENAME}" ; fi
+
   ffmpeg \
       -y \
+      ${LOGLEVEL} \
+      -framerate ${FRAMERATE} \
       -f image2pipe \
       -vcodec mjpeg \
       -i - \
@@ -24,21 +35,16 @@ videoprocessor () {
       -c:v libx264 \
       -crf 17 \
       -pix_fmt yuv420p \
-      $@
+      ${FILENAME}
 }
 
 videoofthedaycreation () {
   
   FR=$1
-  FRAMERATE="-framerate ${FR}"
   FOLDERPATH=$2
   VIDEOTYPE=$3
 
-  LOGLEVEL="-loglevel quiet"
-  if [[ ${DEBUG} -eq 1 ]]
-  then
-    LOGLEVEL=""
-  fi
+
 
   DATEPROCESSED=$( echo ${FOLDERPATH} | awk -F_ '{print $2}' )
   echo "Processing video of the day from ${FOLDERPATH}"
@@ -47,18 +53,17 @@ videoofthedaycreation () {
   # select files larger than, allow to remove dark images
   if [[ ${VIDEOTYPE} == "DAY" ]]
   then
-    dayfileselection | videoprocessor ${LOGLEVEL} ${FRAMERATE} ${FILENAME}
+    dayfileselection | videoprocessor ${LOGLEVEL} ${FR} ${FILENAME}
   elif [[ ${VIDEOTYPE} == "NIGHT" ]]
   then
-    nightfileselection | videoprocessor ${LOGLEVEL} ${FRAMERATE} ${FILENAME}
+    nightfileselection | videoprocessor ${LOGLEVEL} ${FR} ${FILENAME}
   elif [[ ${VIDEOTYPE} == "ALL" ]]
   then
-    cat *.jpg | videoprocessor ${LOGLEVEL} ${FRAMERATE} ${FILENAME}
+    cat *.jpg | videoprocessor ${LOGLEVEL} ${FR} ${FILENAME}
   fi
 
   echo "Video processing completed"
   echo "rsync -avhH --stats --progress zeus:${FILENAME} ./"
-
 }
 
 # $1: 
@@ -67,7 +72,7 @@ addtimestamp () {
   PICTURE=$1
 
   FILEDATE=$(echo ${PICTURE} | awk -F\. '{print $1}')
-  TIMESTAMP=$(echo ${FILEDATE/T/} | awk -F\+ '{print $1}' | sed 's/^\(.\{12\}\)/\1./')
+  TIMESTAMP=$(echo ${FILEDATE/T/} | awk -F\+ '{print $1}' | sed 's/.\{2\}$/.&/')
 
   if [ -f ${FILEDATE}.jpg ]
   then
@@ -92,6 +97,7 @@ addtimestamp () {
 ###
 
 # Set some default values:
+SYNCFILE=0
 TIMESTAMPCREATION=0
 VIDEOPROCESSING=0
 FRAMERATE=30
@@ -101,7 +107,7 @@ WORKINGFOLDER=unset
 
 usage()
 {
-  echo "Usage: buildTimelapse [ -t | --timestamp ] [ -c | --createvideo ]
+  echo "Usage: buildTimelapse [ -s | --syncfile ] [ -t | --timestamp ] [ -c | --createvideo ]
                         [ -f | --framerate <NUMBER> ] 
                         [ -n | --night ] | [ -d | --day ] | [ -a | --all ]
                         [ -v | --verbose ]
@@ -109,7 +115,7 @@ usage()
   exit 2
 }
 
-PARSED_ARGUMENTS=$(getopt -a -n buildTimelapse -o tcndav,w:f: --long timestamp,createvideo,night,day,all,verbose,workingfolder:,framerate: -- "$@")
+PARSED_ARGUMENTS=$(getopt -a -n buildTimelapse -o stcndav,w:f: --long syncfile,timestamp,createvideo,night,day,all,verbose,workingfolder:,framerate: -- "$@")
 VALID_ARGUMENTS=$?
 if [ "$VALID_ARGUMENTS" != "0" ]
 then
@@ -121,6 +127,7 @@ eval set -- "$PARSED_ARGUMENTS"
 while :
 do
   case "$1" in
+    -s | --syncfiles)           SYNCFILE=1              ; shift   ;;
     -t | --timestamp)           TIMESTAMPCREATION=1     ; shift   ;;
     -c | --createvideo)         VIDEOPROCESSING=1       ; shift   ;;
     -f | --framerate)           FRAMERATE="$2"          ; shift 2 ;;
@@ -138,6 +145,7 @@ do
   esac
 done
 
+echo "SYNCFILE             : ${SYNCFILE}"
 echo "TIMESTAMPCREATION    : ${TIMESTAMPCREATION}"
 echo "VIDEOPROCESSING      : ${VIDEOPROCESSING}"
 echo "FRAMERATE            : ${FRAMERATE}"
@@ -172,20 +180,23 @@ then
   LOGLEVEL="--progress"
 fi
 
-echo "Synchronise folder ${WORKINGFOLDER}"
+if [[ ${SYNCFILE} -eq 1 ]]
+then
+  echo "Synchronise folder ${WORKINGFOLDER}"
 
-rsync -avhH \
-    --stats \
-    --include="*/" \
-    --include="${DATEPROCESSED}T*" \
-	  --exclude="*" \
-	  ${LOGLEVEL} \
-	  /mnt/dnas/pi/bristol/raw/ ${ROOT}/
+  rsync -avhH \
+      --stats \
+      --include="*/" \
+      --include="${DATEPROCESSED}T*" \
+      --exclude="*" \
+      ${LOGLEVEL} \
+      /mnt/dnas/pi/bristol/raw/ ${ROOT}/
+
+  echo "Synchronisation completed"
+fi
 
 cd ${ROOT}
 if [[ ${DEBUG} -eq 1 ]] ; then echo "Working path: ${ROOT}" ; fi
-
-echo "Synchronisation completed"
 
 ###
 #
