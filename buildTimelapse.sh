@@ -15,6 +15,7 @@ nightfileselection () {
 }
 
 videoprocessor () {
+
   LOGLEVEL="-loglevel quiet"
   if [[ ${DEBUG} -eq 1 ]]
   then
@@ -43,12 +44,10 @@ videoofthedaycreation () {
   FR=$1
   FOLDERPATH=$2
   VIDEOTYPE=$3
+  FILENAME=$4
+  DATEPROCESSED=${5}
 
-
-
-  DATEPROCESSED=$( echo ${FOLDERPATH} | awk -F_ '{print $2}' )
   echo "Processing video of the day from ${FOLDERPATH}"
-  FILENAME="${FOLDERPATH}/TL-${FR}-${VIDEOTYPE}-${DATEPROCESSED}.mp4"
 
   # select files larger than, allow to remove dark images
   if [[ ${VIDEOTYPE} == "DAY" ]]
@@ -63,7 +62,33 @@ videoofthedaycreation () {
   fi
 
   echo "Video processing completed"
-  echo "rsync -avhH --stats --progress zeus:${FILENAME} ./"
+  echo "rsync -avhH --stats --progress zeus:${FOLDERPATH}/${FILENAME} ./"
+}
+
+videoprogressbaroverlay () {
+  FILENAME=$1
+  if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprogressbaroverlay - FILENAME: ${FILENAME}" ; fi
+
+  LOGLEVEL="-loglevel quiet"
+  if [[ ${DEBUG} -eq 1 ]]
+  then
+    LOGLEVEL=""
+  fi
+
+  WIDTH=$( ffprobe -v error -show_entries stream=width -of default=noprint_wrappers=1 ${FILENAME} | awk -F= '{print $2}' )
+  if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprogressbaroverlay - WIDTH: ${WIDTH}" ; fi
+  
+  DURATION=$( ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 ${FILENAME} | awk -F= '{print $2}' )
+  if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprogressbaroverlay - DURATION: ${DURATION}" ; fi
+
+  ffmpeg \
+    -y \
+    ${LOGLEVEL} \
+    -i ${FILENAME} \
+    -filter_complex "color=c=red:s=${WIDTH}x5[bar];[0][bar]overlay=-w+(w/${DURATION})*t:H-h:shortest=1" \
+    -c:a \
+    copy \
+    PB-${FILENAME}
 }
 
 # $1: 
@@ -100,6 +125,7 @@ addtimestamp () {
 SYNCFILE=0
 TIMESTAMPCREATION=0
 VIDEOPROCESSING=0
+PROGRESSOVERLAY=0
 FRAMERATE=30
 VIDEOTYPE="ALL"
 DEBUG=0
@@ -107,29 +133,32 @@ WORKINGFOLDER=unset
 
 usage()
 {
-  echo "Usage: buildTimelapse [ -s | --syncfile ] [ -t | --timestamp ] [ -c | --createvideo ]
+  echo "Usage: buildTimelapse [ -s | --syncfile ] [ -t | --timestamp ] [ -c | --createvideo ] [ -p | --progressoverlay ]
                         [ -f | --framerate <NUMBER> ] 
                         [ -n | --night ] | [ -d | --day ] | [ -a | --all ]
                         [ -v | --verbose ]
+                        [ -h | --help ]
                         [ -w | --workingfolder <foldername>]"
   exit 2
 }
 
-PARSED_ARGUMENTS=$(getopt -a -n buildTimelapse -o stcndav,w:f: --long syncfile,timestamp,createvideo,night,day,all,verbose,workingfolder:,framerate: -- "$@")
+PARSED_ARGUMENTS=$(getopt -a -n buildTimelapse -o stcpndahv,w:f: --long syncfile,timestamp,createvideo,progressoverlay,night,day,all,verbose,help,workingfolder:,framerate: -- "$@")
 VALID_ARGUMENTS=$?
 if [ "$VALID_ARGUMENTS" != "0" ]
 then
   usage
 fi
 
-echo "PARSED_ARGUMENTS is $PARSED_ARGUMENTS"
+# echo "PARSED_ARGUMENTS is $PARSED_ARGUMENTS"
 eval set -- "$PARSED_ARGUMENTS"
 while :
 do
   case "$1" in
+    -h | --help)                HELP=1                  ; usage   ;;
     -s | --syncfiles)           SYNCFILE=1              ; shift   ;;
     -t | --timestamp)           TIMESTAMPCREATION=1     ; shift   ;;
     -c | --createvideo)         VIDEOPROCESSING=1       ; shift   ;;
+    -p | --progressoverlay)     PROGRESSOVERLAY=1       ; shift   ;;
     -f | --framerate)           FRAMERATE="$2"          ; shift 2 ;;
     -w | --workingfolder)       WORKINGFOLDER="$2"      ; shift 2 ;;
     -n | --night)               VIDEOTYPE="NIGHT"       ; shift   ;;
@@ -148,13 +177,16 @@ done
 echo "SYNCFILE             : ${SYNCFILE}"
 echo "TIMESTAMPCREATION    : ${TIMESTAMPCREATION}"
 echo "VIDEOPROCESSING      : ${VIDEOPROCESSING}"
+echo "PROGRESSOVERLAY      : ${PROGRESSOVERLAY}"
 echo "FRAMERATE            : ${FRAMERATE}"
 echo "VIDEOTYPE            : ${VIDEOTYPE}"
 echo "WORKINGFOLDER        : ${WORKINGFOLDER}"
 echo "DEBUG                : ${DEBUG}"
 echo "Parameters remaining : $@"
 
-ROOT=/mnt/dnas/pi/bristol/${WORKINGFOLDER}
+FOLDERPATH=/mnt/dnas/pi/bristol/${WORKINGFOLDER}
+DATEPROCESSED=$( echo ${FOLDERPATH} | awk -F_ '{print $2}' )
+FILENAME="TL-${FRAMERATE}-${VIDEOTYPE}-${DATEPROCESSED}.mp4"
 
 ###
 #
@@ -165,12 +197,12 @@ ROOT=/mnt/dnas/pi/bristol/${WORKINGFOLDER}
 DATEPROCESSED=$( echo ${WORKINGFOLDER} | awk -F_ '{print $2}' )
 if [[ ${DEBUG} -eq 1 ]] ; then echo "Processing video of the day from ${WORKINGFOLDER}" ; fi
 
-mkdir -p ${ROOT}
-chmod g+w ${ROOT}
+mkdir -p ${FOLDERPATH}
+chmod g+w ${FOLDERPATH}
 
-if [ ! -d "${ROOT}" ]
+if [ ! -d "${FOLDERPATH}" ]
 then
-  echo "Folder ${ROOT} does not exist"
+  echo "Folder ${FOLDERPATH} does not exist"
   exit 1
 fi
 
@@ -190,13 +222,13 @@ then
       --include="${DATEPROCESSED}T*" \
       --exclude="*" \
       ${LOGLEVEL} \
-      /mnt/dnas/pi/bristol/raw/ ${ROOT}/
+      /mnt/dnas/pi/bristol/raw/ ${FOLDERPATH}/
 
   echo "Synchronisation completed"
 fi
 
-cd ${ROOT}
-if [[ ${DEBUG} -eq 1 ]] ; then echo "Working path: ${ROOT}" ; fi
+cd ${FOLDERPATH}
+if [[ ${DEBUG} -eq 1 ]] ; then echo "Working path: ${FOLDERPATH}" ; fi
 
 ###
 #
@@ -213,7 +245,7 @@ then
     export -f addtimestamp
     ls *.jpeg | parallel --bar -j20 addtimestamp ${PICTURE}
   else
-    cd ${ROOT}
+    cd ${FOLDERPATH}
     for PICTURE in $( ls *.jpeg )
     do
       addtimestamp ${PICTURE}
@@ -231,7 +263,12 @@ fi
 
 if [[ ${VIDEOPROCESSING} -eq 1 ]]
 then
-  videoofthedaycreation ${FRAMERATE} ${ROOT} ${VIDEOTYPE}
+  videoofthedaycreation ${FRAMERATE} ${FOLDERPATH} ${VIDEOTYPE} ${FILENAME} ${DATEPROCESSED}
+fi
+
+if [[ ${PROGRESSOVERLAY} -eq 1 ]]
+then
+  videoprogressbaroverlay ${FILENAME}
 fi
 
 exit 0
