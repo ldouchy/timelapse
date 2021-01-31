@@ -107,6 +107,7 @@ function videoprocessor () {
   ffmpeg \
       -y \
       ${LOGLEVEL} \
+      -stats \
       -framerate ${FRAMERATE} \
       -f image2pipe \
       -vcodec mjpeg \
@@ -163,6 +164,7 @@ function videoprogressbaroverlay () {
   ffmpeg \
     -y \
     ${LOGLEVEL} \
+    -stats \
     -i ${FILENAME} \
     -filter_complex "color=c=red:s=${WIDTH}x5[bar];[0][bar]overlay=-w+(w/${DURATION})*t:H-h:shortest=1" \
     -c:a \
