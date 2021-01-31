@@ -13,25 +13,31 @@ VIDEOPROCESSING=0
 PROGRESSOVERLAY=0
 FRAMERATE=30
 VIDEOTYPE="ALL"
-WORKINGFOLDER=unset
+INPUTPATH=unset
+SOURCEPATH="/mnt/dnas/pi/bristol"
+SOURCEFOLDER="raw"
+OUTPUTPATH=unset
+TARGETPATH=unset
+TARGETFOLDER=unset
 DEBUG=0
 
 function usage () {
   echo "Usage: buildTimelapse [ -s | --syncfile ] [ -t | --timestamp ] [ -c | --createvideo ] [ -p | --progressoverlay ]
                         [ -f | --framerate <NUMBER> ] 
-                        [ -n | --night ] | [ -d | --day ] | [ -a | --all ]
+                        [ -n | --night ] [ -d | --day ] [ -a | --all ]
+                        [ -i | --input </path/folder>]
+                        [ -o | --output </path/folder>]
                         [ -v | --verbose ]
-                        [ -h | --help ]
-                        [ -w | --workingfolder <foldername>]"
+                        [ -h | --help ]"
   exit 0
 }
 
-PARSED_ARGUMENTS=$( getopt -a -n \
-                      buildTimelapse \
-                        -o stcpndahv,w:f: \
-                        --long syncfile,timestamp,createvideo,progressoverlay,night,day,all,verbose,help,workingfolder:,framerate: \
-                        -- \
-                        "$@" )
+PARSED_ARGUMENTS=$( getopt -a \
+                      --name buildTimelapse \
+                      -o stcpndavh,f:i:o: \
+                      --long syncfile,timestamp,createvideo,progressoverlay,night,day,all,input:,output:,verbose,help,framerate: \
+                      -- \
+                      "$@" )
 
 VALID_ARGUMENTS=$?
 if [ "$VALID_ARGUMENTS" != "0" ]
@@ -39,7 +45,8 @@ then
   usage
 fi
 
-echo "PARSED_ARGUMENTS is $PARSED_ARGUMENTS"
+# getopt debug, can't be managed via -h
+# echo "PARSED_ARGUMENTS is $PARSED_ARGUMENTS"
 eval set -- "$PARSED_ARGUMENTS"
 while :
 do
@@ -50,7 +57,8 @@ do
     -c | --createvideo)         VIDEOPROCESSING=1       ; shift   ;;
     -p | --progressoverlay)     PROGRESSOVERLAY=1       ; shift   ;;
     -f | --framerate)           FRAMERATE="$2"          ; shift 2 ;;
-    -w | --workingfolder)       WORKINGFOLDER="$2"      ; shift 2 ;;
+    -i | --input)               INPUTPATH="$2"          ; shift 2 ;;
+    -o | --output)              OUTPUTPATH="$2"         ; shift 2 ;;
     -n | --night)               VIDEOTYPE="NIGHT"       ; shift   ;;
     -d | --day)                 VIDEOTYPE="DAY"         ; shift   ;;
     -a | --all)                 VIDEOTYPE="ALL"         ; shift   ;;
@@ -64,17 +72,53 @@ do
   esac
 done
 
+if [[ ! -d "${INPUTPATH}" ]]
+then
+  echo "Input folder does not exist"
+  exit 1
+fi
+
+if [[ ${OUTPUTPATH} == "unset" ]]
+then
+  echo "OUTPUTPATH folder is mandatory"
+  usage
+fi
+
+# Split input and reconstruct it to ensure consistency
+SOURCEPATH=$(dirname "${INPUTPATH}")
+SOURCEFOLDER=$(basename "${INPUTPATH}")
+INPUTPATH=${SOURCEPATH}/${SOURCEFOLDER}
+
+# Split output and reconstruct it to ensure consistency
+TARGETPATH=$(dirname "${OUTPUTPATH}")
+TARGETFOLDER=$(basename "${OUTPUTPATH}")
+OUTPUTPATH="${TARGETPATH}/${TARGETFOLDER}"
+
+DATEPROCESSED=$( echo ${TARGETFOLDER} | awk -F_ '{print $2}' )
+
+FILENAME="TL-${FRAMERATE}-${VIDEOTYPE}-${DATEPROCESSED}.mp4"
+
 if [[ ${DEBUG} -eq 1 ]]
 then
-  echo "SYNCFILE             : ${SYNCFILE}"
-  echo "TIMESTAMPCREATION    : ${TIMESTAMPCREATION}"
-  echo "VIDEOPROCESSING      : ${VIDEOPROCESSING}"
-  echo "PROGRESSOVERLAY      : ${PROGRESSOVERLAY}"
-  echo "FRAMERATE            : ${FRAMERATE}"
-  echo "VIDEOTYPE            : ${VIDEOTYPE}"
-  echo "WORKINGFOLDER        : ${WORKINGFOLDER}"
-  echo "DEBUG                : ${DEBUG}"
-  echo "Parameters remaining : $@"
+  echo "Arguments passed to the command line/default values:
+  SYNCFILE             : ${SYNCFILE}
+  TIMESTAMPCREATION    : ${TIMESTAMPCREATION}
+  VIDEOPROCESSING      : ${VIDEOPROCESSING}
+  PROGRESSOVERLAY      : ${PROGRESSOVERLAY}
+  FRAMERATE            : ${FRAMERATE}
+  VIDEOTYPE            : ${VIDEOTYPE}
+  DEBUG                : ${DEBUG}
+  Parameters remaining : $@
+
+Computed variables   :
+  INPUTPATH            : ${INPUTPATH}
+  SOURCEPATH           : ${SOURCEPATH}
+  SOURCEFOLDER         : ${SOURCEFOLDER}
+  OUTPUTPATH           : ${OUTPUTPATH}
+  TARGETPATH           : ${TARGETPATH}
+  TARGETFOLDER         : ${TARGETFOLDER}
+  DATEPROCESSED        : ${DATEPROCESSED}
+  FILENAME             : ${FILENAME}"
 fi
 
 
@@ -85,24 +129,26 @@ fi
 ###
 
 function dayfileselection () {
+
   find ./ -name "*.jpg" -type f -size +800k -print0 | sort -z | xargs -0 cat
 }
 
 function nightfileselection () {
+
   find ./ -name "*.jpg" -type f -size -800k -print0 | sort -z | xargs -0 cat
 }
 
 function videoprocessor () {
+
+  FRAMERATE=${1}      ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprocessor - FRAMERATE: ${FRAMERATE}" ; fi
+  OUTPUTPATH=${2}     ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprocessor - OUTPUTPATH: ${OUTPUTPATH}" ; fi
+  FILENAME=${3}       ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprocessor - FILENAME: ${FILENAME}" ; fi
 
   LOGLEVEL="-loglevel quiet"
   if [[ ${DEBUG} -eq 1 ]]
   then
     LOGLEVEL=""
   fi
-
-  FRAMERATE=$2      ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprocessor - FRAMERATE: ${FRAMERATE}" ; fi
-  FILENAME=$3       ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprocessor - FILENAME: ${FILENAME}" ; fi
-  DATEPROCESSED=$4  ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprocessor - DATEPROCESSED: ${DATEPROCESSED}" ; fi
 
   ffmpeg \
       -y \
@@ -116,38 +162,39 @@ function videoprocessor () {
       -c:v libx264 \
       -crf 17 \
       -pix_fmt yuvj420p \
-      ${FILENAME}
+      ${OUTPUTPATH}/${FILENAME}
 }
 
 function videoofthedaycreation () {
   
-  FR=$1
-  FOLDERPATH=$2
-  VIDEOTYPE=$3
-  FILENAME=$4         ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoofthedaycreation - FILENAME: ${FILENAME}" ; fi
-  DATEPROCESSED=${5}
+  FRAMERATE=${1}        ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoofthedaycreation - FRAMERATE: ${FRAMERATE}" ; fi
+  VIDEOTYPE=${2}        ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoofthedaycreation - VIDEOTYPE: ${VIDEOTYPE}" ; fi
+  OUTPUTPATH=${3}       ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoofthedaycreation - OUTPUTPATH: ${OUTPUTPATH}" ; fi
+  FILENAME=${4}         ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoofthedaycreation - FILENAME: ${FILENAME}" ; fi
+  DATEPROCESSED=${5}    ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoofthedaycreation - DATEPROCESSED: ${DATEPROCESSED}" ; fi
 
-  echo "Processing video of the day from ${FOLDERPATH}"
+  echo "Processing video of the day from $(pwd)"
 
   # select files larger than, allow to remove dark images
   if [[ ${VIDEOTYPE} == "DAY" ]]
   then
-    dayfileselection | videoprocessor ${LOGLEVEL} ${FR} ${FILENAME} ${DATEPROCESSED}
+    dayfileselection | videoprocessor ${FRAMERATE} ${OUTPUTPATH} ${FILENAME} ${DATEPROCESSED}
   elif [[ ${VIDEOTYPE} == "NIGHT" ]]
   then
-    nightfileselection | videoprocessor ${LOGLEVEL} ${FR} ${FILENAME} ${DATEPROCESSED}
+    nightfileselection | videoprocessor ${FRAMERATE} ${OUTPUTPATH} ${FILENAME} ${DATEPROCESSED}
   elif [[ ${VIDEOTYPE} == "ALL" ]]
   then
-    cat *.jpg | videoprocessor ${LOGLEVEL} ${FR} ${FILENAME} ${DATEPROCESSED}
+    cat *.jpg | videoprocessor ${FRAMERATE} ${OUTPUTPATH} ${FILENAME} ${DATEPROCESSED}
   fi
 
   echo "Video processing completed"
-  echo "rsync -avhH --stats --progress zeus:${FOLDERPATH}/${FILENAME} ./"
+  echo "rsync -avhH --stats --progress zeus:${OUTPUTPATH}/${FILENAME} ./"
 }
 
 function videoprogressbaroverlay () {
-  FILENAME=$1
-  if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprogressbaroverlay - FILENAME: ${FILENAME}" ; fi
+
+  OUTPUTPATH=${1} ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprogressbaroverlay - OUTPUTPATH: ${OUTPUTPATH}" ; fi
+  FILENAME=${2}   ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprogressbaroverlay - FILENAME: ${FILENAME}" ; fi
 
   LOGLEVEL="-loglevel quiet"
   if [[ ${DEBUG} -eq 1 ]]
@@ -155,24 +202,24 @@ function videoprogressbaroverlay () {
     LOGLEVEL=""
   fi
 
-  WIDTH=$( ffprobe -v error -show_entries stream=width -of default=noprint_wrappers=1 ${FILENAME} | awk -F= '{print $2}' )
+  WIDTH=$( ffprobe -v error -show_entries stream=width -of default=noprint_wrappers=1 ${OUTPUTPATH}/${FILENAME} | awk -F= '{print $2}' )
   if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprogressbaroverlay - WIDTH: ${WIDTH}" ; fi
   
-  DURATION=$( ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 ${FILENAME} | awk -F= '{print $2}' )
+  DURATION=$( ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 ${OUTPUTPATH}/${FILENAME} | awk -F= '{print $2}' )
   if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprogressbaroverlay - DURATION: ${DURATION}" ; fi
 
   ffmpeg \
     -y \
     ${LOGLEVEL} \
     -stats \
-    -i ${FILENAME} \
+    -i ${OUTPUTPATH}/${FILENAME} \
     -filter_complex "color=c=red:s=${WIDTH}x5[bar];[0][bar]overlay=-w+(w/${DURATION})*t:H-h:shortest=1" \
     -c:a \
     copy \
-    PB-${FILENAME}
+    ${OUTPUTPATH}/PB-${FILENAME}
 
   echo "Progress bar added"
-  echo "rsync -avhH --stats --progress zeus:${FOLDERPATH}/PB-${FILENAME} ./"
+  echo "rsync -avhH --stats --progress zeus:${OUTPUTPATH}/PB-${FILENAME} ./"
 }
 
 function addtimestamp () {
@@ -182,7 +229,7 @@ function addtimestamp () {
   FILEDATE=$(echo ${PICTURE} | awk -F\. '{print $1}')
   TIMESTAMP=$(echo ${FILEDATE/T/} | awk -F\+ '{print $1}' | sed 's/.\{2\}$/.&/')
 
-  if [ -f ${FILEDATE}.jpg ]
+  if [[ -f ${FILEDATE}.jpg ]]
   then
     touch -t ${TIMESTAMP} ${FILEDATE}.jpg
     return
@@ -201,37 +248,21 @@ function addtimestamp () {
 
 ###
 #
-# Global variables setup
-# 
-###
-
-FOLDERPATH=/mnt/dnas/pi/bristol/${WORKINGFOLDER}
-if [[ ${DEBUG} -eq 1 ]] ; then echo "FOLDERPATH: ${FOLDERPATH}" ; fi
-
-DATEPROCESSED=$( echo ${WORKINGFOLDER} | awk -F_ '{print $2}' )
-if [[ ${DEBUG} -eq 1 ]] ; then echo "DATEPROCESSED: ${DATEPROCESSED}" ; fi
-
-FILENAME="TL-${FRAMERATE}-${VIDEOTYPE}-${DATEPROCESSED}.mp4"
-if [[ ${DEBUG} -eq 1 ]] ; then echo "FILENAME: ${FILENAME}" ; fi
-
-
-###
-#
 # Create working folder and set mod. 
 # Usefull when working with different users sharing the same group
 #
 ###
 
-mkdir -p ${FOLDERPATH}
-chmod g+w ${FOLDERPATH}
+mkdir -p ${OUTPUTPATH}
+chmod g+w ${OUTPUTPATH}
 
-if [ ! -d "${FOLDERPATH}" ]
+if [[ ! -d "${OUTPUTPATH}" ]]
 then
-  echo "Folder ${FOLDERPATH} does not exist"
+  echo "Folder ${OUTPUTPATH} does not exist"
   exit 1
 fi
 
-cd ${FOLDERPATH}
+cd ${INPUTPATH}
 
 
 ###
@@ -242,7 +273,7 @@ cd ${FOLDERPATH}
 
 if [[ ${SYNCFILE} -eq 1 ]]
 then
-  echo "Synchronise folder ${WORKINGFOLDER}"
+  echo "Synchronise folder ${TARGETFOLDER}"
 
   LOGLEVEL="--quiet"
   if [[ ${DEBUG} -eq 1 ]]
@@ -256,7 +287,7 @@ then
       --include="${DATEPROCESSED}T*" \
       --exclude="*" \
       ${LOGLEVEL} \
-      /mnt/dnas/pi/bristol/raw/ ${FOLDERPATH}/
+      ${INPUTPATH}/ ${OUTPUTPATH}/
 
   echo "Synchronisation completed"
 fi
@@ -277,7 +308,6 @@ then
     export -f addtimestamp
     ls *.jpeg | parallel --bar -j20 addtimestamp ${PICTURE}
   else
-    cd ${FOLDERPATH}
     for PICTURE in $( ls *.jpeg )
     do
       addtimestamp ${PICTURE}
@@ -296,7 +326,7 @@ fi
 
 if [[ ${VIDEOPROCESSING} -eq 1 ]]
 then
-  videoofthedaycreation ${FRAMERATE} ${FOLDERPATH} ${VIDEOTYPE} ${FILENAME} ${DATEPROCESSED}
+  videoofthedaycreation ${FRAMERATE} ${VIDEOTYPE} ${OUTPUTPATH} ${FILENAME} ${DATEPROCESSED} 
 fi
 
 
@@ -308,7 +338,7 @@ fi
 
 if [[ ${PROGRESSOVERLAY} -eq 1 ]]
 then
-  videoprogressbaroverlay ${FILENAME}
+  videoprogressbaroverlay ${OUTPUTPATH} ${FILENAME}
 fi
 
 exit 0
