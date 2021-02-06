@@ -1,5 +1,6 @@
 #!/usr/bin/bash
 
+
 ###
 #
 # Script argument management
@@ -13,15 +14,21 @@ TIMESTAMPCREATION=0
 VIDEOPROCESSING=0
 PROGRESSOVERLAY=0
 FRAMERATE=30
-VIDEOTYPE="ALL"
 INPUTPATH=unset
-SOURCEPATH="/mnt/dnas/pi/bristol"
-SOURCEFOLDER="raw"
+SOURCEPATH=unset
+SOURCEFOLDER=unset
 OUTPUTPATH=unset
 TARGETPATH=unset
 TARGETFOLDER=unset
 IMAGELIST=()
 DEBUG=0
+
+
+###
+#
+# Function dedicated to the argument processing
+#
+###
 
 function mandatoryvar () {
   VARIABLE=${1}
@@ -37,7 +44,6 @@ function usage () {
   echo "Usage: buildTimelapse [ -i | --input </path/folder>] [ -o | --output </path/folder>] [ -s | --start YYYY-MM-DD HH:MM:SS] [ -e | --end YYYY-MM-DD HH:MM:SS] 
   [ -t | --timestamp ] [ -c | --createvideo ] [ -p | --progressoverlay ]
   [ -f | --framerate <NUMBER> ] 
-  [ -n | --night ] [ -d | --day ] [ -a | --all ]
   [ -v | --verbose ]
   [ -h | --help ]"
   exit 0
@@ -45,8 +51,8 @@ function usage () {
 
 PARSED_ARGUMENTS=$( getopt -a \
                       --name buildTimelapse \
-                      -o tcpndavh,s:e:f:i:o: \
-                      --long timestamp,createvideo,progressoverlay,night,day,all,input:,output:,start:,end:,verbose,help,framerate: \
+                      -o tcpvh,s:e:f:i:o: \
+                      --long timestamp,createvideo,progressoverlay,input:,output:,start:,end:,verbose,help,framerate: \
                       -- \
                       "$@" )
 
@@ -63,18 +69,28 @@ while :
 do
   case "$1" in
     -h | --help)                HELP=1                  ; usage   ;;
+
+    -c | --createvideo)         VIDEOPROCESSING=1       ; shift   ;;
+
+    # Timestamp video requires video creation
+    -t | --timestamp)           TIMESTAMPCREATION=1; 
+                                VIDEOPROCESSING=1       ; shift   ;;
+
+    # Overlay video requires video cration
+    -p | --progressoverlay)     PROGRESSOVERLAY=1 ; 
+                                VIDEOPROCESSING=1       ; shift   ;;
+    
     -s | --start)               START="${2}"            ; shift 2 ;;
     -e | --end)                 END="${2}"              ; shift 2 ;;
-    -t | --timestamp)           TIMESTAMPCREATION=1     ; shift   ;;
-    -c | --createvideo)         VIDEOPROCESSING=1       ; shift   ;;
-    -p | --progressoverlay)     PROGRESSOVERLAY=1       ; shift   ;;
     -f | --framerate)           FRAMERATE="${2}"        ; shift 2 ;;
     -i | --input)               INPUTPATH="${2}"        ; shift 2 ;;
     -o | --output)              OUTPUTPATH="${2}"       ; shift 2 ;;
-    -n | --night)               VIDEOTYPE="NIGHT"       ; shift   ;;
-    -d | --day)                 VIDEOTYPE="DAY"         ; shift   ;;
-    -a | --all)                 VIDEOTYPE="ALL"         ; shift   ;;
+
+    # Verbosity control
     -v | --verbose)             DEBUG=1                 ; shift   ;;
+    --vv )                      DEBUG=2                 ; shift   ;;
+    --vvv )                     DEBUG=3                 ; shift   ;;
+
     # -- means the end of the arguments; drop this, and break out of the while loop
     --) shift; break ;;
     # If invalid options were passed, then getopt should have reported an error,
@@ -122,32 +138,32 @@ fi
 
 # Create array of files to be processed
 IMAGELIST=( $( find ${INPUTPATH} -type f -name "*.jpeg" -newermt "${START}" -not -newermt "${END}" ) )
-# Sort array
+
+# Sort array - not needed just in case it's required in the future
 IFS=$'\n' IMAGELIST=($(sort <<<"${IMAGELIST[*]}")); unset IFS
 
-if [[ ${#IMAGELIST[@]} -eq "0" ]]
+if [[ ${#IMAGELIST[@]} -le "${FRAMERATE}" ]]
 then
-  echo "No image selected"
+  echo "Video is less than a second long. Select more files or decrease the framerate"
   exit 1
 else
-  # TODO: manage a secondlevel of verbosity
-  if [[ ${DEBUG} -eq 2 ]]
+  if [[ ${DEBUG} -ge 2 ]]
   then
     echo "${#IMAGELIST[@]} image(s) selected"
-        printf '%s\n' "${IMAGELIST[@]}"
+    printf '%s\n' "${IMAGELIST[@]}"
   fi
 fi
 
-FILENAME="TL-${FRAMERATE}-${VIDEOTYPE}.mp4"
+URAN=$( cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 8 | head -n 1 )
+FILENAME="TL-${FRAMERATE}-${URAN}.mp4"
 
-if [[ ${DEBUG} -eq 1 ]]
+if [[ ${DEBUG} -ge 1 ]]
 then
   echo "Arguments passed to the command line/default values:
   TIMESTAMPCREATION    : ${TIMESTAMPCREATION}
   VIDEOPROCESSING      : ${VIDEOPROCESSING}
   PROGRESSOVERLAY      : ${PROGRESSOVERLAY}
   FRAMERATE            : ${FRAMERATE}
-  VIDEOTYPE            : ${VIDEOTYPE}
   DEBUG                : ${DEBUG}
   Parameters remaining : $@
 
@@ -169,25 +185,14 @@ fi
 #
 ###
 
-# TODO: remove functions dayfileselection and nightfileselection, and clean related code
-function dayfileselection () {
-
-  find ./ -name "*.jpeg" -type f -size +800k -print0 | sort -z | xargs -0 cat
-}
-
-function nightfileselection () {
-
-  find ./ -name "*.jpeg" -type f -size -800k -print0 | sort -z | xargs -0 cat
-}
-
 function videoprocessor () {
 
-  FRAMERATE=${1}      ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprocessor - FRAMERATE:  ${FRAMERATE}"    ; fi
-  OUTPUTPATH=${2}     ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprocessor - OUTPUTPATH: ${OUTPUTPATH}"   ; fi
-  FILENAME=${3}       ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprocessor - FILENAME:   ${FILENAME}"     ; fi
+  FRAMERATE=${1}      ; if [[ ${DEBUG} -ge 1 ]] ; then echo "videoprocessor - FRAMERATE:  ${FRAMERATE}"    ; fi
+  OUTPUTPATH=${2}     ; if [[ ${DEBUG} -ge 1 ]] ; then echo "videoprocessor - OUTPUTPATH: ${OUTPUTPATH}"   ; fi
+  FILENAME=${3}       ; if [[ ${DEBUG} -ge 1 ]] ; then echo "videoprocessor - FILENAME:   ${FILENAME}"     ; fi
 
   LOGLEVEL="-loglevel quiet"
-  if [[ ${DEBUG} -eq 1 ]]
+  if [[ ${DEBUG} -ge 1 ]]
   then
     LOGLEVEL=""
   fi
@@ -209,48 +214,36 @@ function videoprocessor () {
 
 function videocreation () {
   
-  FRAMERATE=${1}    ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videocreation - FRAMERATE: ${FRAMERATE}"    ; fi
-  VIDEOTYPE=${2}    ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videocreation - VIDEOTYPE: ${VIDEOTYPE}"    ; fi
-  OUTPUTPATH=${3}   ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videocreation - OUTPUTPATH: ${OUTPUTPATH}"  ; fi
-  FILENAME=${4}     ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videocreation - FILENAME: ${FILENAME}"      ; fi
-  IMAGELIST=${5}    ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videocreation - IMAGELIST: ${#IMAGELIST[@]} images selected" ; fi
+  FRAMERATE=${1}    ; if [[ ${DEBUG} -ge 1 ]] ; then echo "videocreation - FRAMERATE: ${FRAMERATE}"    ; fi
+  OUTPUTPATH=${2}   ; if [[ ${DEBUG} -ge 1 ]] ; then echo "videocreation - OUTPUTPATH: ${OUTPUTPATH}"  ; fi
+  FILENAME=${3}     ; if [[ ${DEBUG} -ge 1 ]] ; then echo "videocreation - FILENAME: ${FILENAME}"      ; fi
+  IMAGELIST=${4}    ; if [[ ${DEBUG} -ge 1 ]] ; then echo "videocreation - IMAGELIST: ${#IMAGELIST[@]} images selected" ; fi
   
-  if [[ ${DEBUG} -eq 2 ]] ; then echo -n "videocreation - IMAGELIST: " ; printf '%s\n' "${IMAGELIST[@]}"  ; fi
+  if [[ ${DEBUG} -ge 2 ]] ; then echo -n "videocreation - IMAGELIST: " ; printf '%s\n' "${IMAGELIST[@]}"  ; fi
 
   echo "Processing video $(pwd)"
 
-  # select files larger than, allow to remove dark images
-  if [[ ${VIDEOTYPE} == "DAY" ]]
-  then
-    dayfileselection | videoprocessor ${FRAMERATE} ${OUTPUTPATH} ${FILENAME}
-  elif [[ ${VIDEOTYPE} == "NIGHT" ]]
-  then
-    nightfileselection | videoprocessor ${FRAMERATE} ${OUTPUTPATH} ${FILENAME}
-  elif [[ ${VIDEOTYPE} == "ALL" ]]
-  then
-    # for IMAGE in ${IMAGELIST} ; do cat ${IMAGE} ; done | videoprocessor ${FRAMERATE} ${OUTPUTPATH} ${FILENAME}
-    cat *.jpeg | videoprocessor ${FRAMERATE} ${OUTPUTPATH} ${FILENAME}
-  fi
+  cat *.jpeg | videoprocessor ${FRAMERATE} ${OUTPUTPATH} ${FILENAME}
 
   echo "Video processing completed"
 }
 
 function videoprogressbaroverlay () {
 
-  OUTPUTPATH=${1} ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprogressbaroverlay - OUTPUTPATH: ${OUTPUTPATH}" ; fi
-  FILENAME=${2}   ; if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprogressbaroverlay - FILENAME: ${FILENAME}" ; fi
+  OUTPUTPATH=${1} ; if [[ ${DEBUG} -ge 1 ]] ; then echo "videoprogressbaroverlay - OUTPUTPATH: ${OUTPUTPATH}" ; fi
+  FILENAME=${2}   ; if [[ ${DEBUG} -ge 1 ]] ; then echo "videoprogressbaroverlay - FILENAME: ${FILENAME}" ; fi
 
   LOGLEVEL="-loglevel quiet"
-  if [[ ${DEBUG} -eq 1 ]]
+  if [[ ${DEBUG} -ge 1 ]]
   then
     LOGLEVEL=""
   fi
 
   WIDTH=$( ffprobe -v error -show_entries stream=width -of default=noprint_wrappers=1 ${OUTPUTPATH}/${FILENAME} | awk -F= '{print $2}' )
-  if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprogressbaroverlay - WIDTH: ${WIDTH}" ; fi
+  if [[ ${DEBUG} -ge 1 ]] ; then echo "videoprogressbaroverlay - WIDTH: ${WIDTH}" ; fi
   
   DURATION=$( ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1 ${OUTPUTPATH}/${FILENAME} | awk -F= '{print $2}' )
-  if [[ ${DEBUG} -eq 1 ]] ; then echo "videoprogressbaroverlay - DURATION: ${DURATION}" ; fi
+  if [[ ${DEBUG} -ge 1 ]] ; then echo "videoprogressbaroverlay - DURATION: ${DURATION}" ; fi
 
   ffmpeg \
     -y \
@@ -269,8 +262,10 @@ function videoprogressbaroverlay () {
 
 function addtimestamp () {
 
-  IMAGE=$1          ; if [[ ${DEBUG} -eq 1 ]] ; then echo "addtimestamp - IMAGE: ${IMAGE}" ; fi
-  OUTPUTPATH=${2}   ; if [[ ${DEBUG} -eq 1 ]] ; then echo "addtimestamp - OUTPUTPATH: ${OUTPUTPATH}" ; fi
+  IMAGE=$1          ; if [[ ${DEBUG} -ge 1 ]] ; then echo "addtimestamp - IMAGE: ${IMAGE}" ; fi
+  OUTPUTPATH=${2}   ; if [[ ${DEBUG} -ge 1 ]] ; then echo "addtimestamp - OUTPUTPATH: ${OUTPUTPATH}" ; fi
+
+  FILEDATE=$(echo $(basename ${IMAGE}) | awk -F\. '{print $1}')                    ; if [[ ${DEBUG} -eq 1 ]] ; then echo "addtimestamp - FILEDATE: ${FILEDATE}" ; fi
 
   montage \
     -label "${FILEDATE}" ${IMAGE} \
@@ -310,8 +305,8 @@ cd ${OUTPUTPATH}
 #
 ###
 
-if [[ ${DEBUG} -eq 1 ]] ; then echo "cleaning ${OUTPUTPATH} folder content" ; fi
-rm -rf ${OUTPUTPATH}/*
+if [[ ${DEBUG} -ge 1 ]] ; then echo "deleting jpeg from ${OUTPUTPATH}" ; fi
+rm -rf ${OUTPUTPATH}/*.jpeg
 
 if [[ ${TIMESTAMPCREATION} -eq 1 ]]
 then
@@ -351,7 +346,7 @@ fi
 
 if [[ ${VIDEOPROCESSING} -eq 1 ]]
 then
-  videocreation ${FRAMERATE} ${VIDEOTYPE} ${OUTPUTPATH} ${FILENAME} ${IMAGELIST} 
+  videocreation ${FRAMERATE} ${OUTPUTPATH} ${FILENAME} ${IMAGELIST} 
 fi
 
 
@@ -366,13 +361,14 @@ then
   videoprogressbaroverlay ${OUTPUTPATH} ${FILENAME}
 fi
 
+
 ###
 #
-# Clean up files & provide link
+# Clean up jpeg files & provide link
 #
 ###
 
-if [[ ${DEBUG} -eq 1 ]] ; then echo "cleaning ${OUTPUTPATH} folder content" ; fi
+if [[ ${DEBUG} -ge 1 ]] ; then echo "cleaning ${OUTPUTPATH} folder content" ; fi
 rm -rf ${OUTPUTPATH}/*.jpeg
 
 if [[ ${VIDEOPROCESSING} -eq 1 ]] || [[ ${PROGRESSOVERLAY} -eq 1 ]]
